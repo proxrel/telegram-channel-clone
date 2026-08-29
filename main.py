@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
-from telethon import TelegramClient
+from telethon import TelegramClient, functions, types
 from telethon.errors import FloodWaitError
 
 load_dotenv()
@@ -17,14 +17,10 @@ API_HASH = os.getenv('API_HASH', '')
 SESSION_NAME = os.getenv('SESSION_NAME', 'channel_forwarder')
 SOURCE = os.getenv('SOURCE_CHANNEL', '')
 DEST = os.getenv('DEST_CHANNEL', '')
-SECTION_MODE = os.getenv('SECTION_MODE', 'hashtags')
-SECTION_REGEX = os.getenv('SECTION_REGEX', r'^(?:#|##)\s*(.+)$')
 DRY_RUN = os.getenv('DRY_RUN', 'true').lower() == 'true'
 SILENT_FORWARD = os.getenv('SILENT_FORWARD', 'false').lower() == 'true'
 RESUME_FILE = os.getenv('RESUME_FILE', 'state.json')
-POST_DELAY_SECONDS = float(os.getenv('POST_DELAY_SECONDS', '0.5'))
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))
-TOPIC_MODE = os.getenv('TOPIC_MODE', 'false').lower() == 'true'
+POST_DELAY_SECONDS = float(os.getenv('POST_DELAY_SECONDS', '0.8'))
 TOPIC_MAP_FILE = os.getenv('TOPIC_MAP_FILE', 'topic_map.json')
 
 if not API_ID or not API_HASH or not SOURCE or not DEST:
@@ -34,41 +30,21 @@ if not API_ID or not API_HASH or not SOURCE or not DEST:
 @dataclass
 class ForwardItem:
     source_id: int
+    topic_id_source: Optional[int]
+    topic_name: Optional[str]
     date: str
     text_preview: str
-    grouped_id: Optional[int]
-    section: Optional[str]
     kind: str
     forwarded: bool = False
     skipped_reason: Optional[str] = None
     dest_id: Optional[int] = None
 
 
-class SectionTracker:
-    def __init__(self, mode: str, pattern: str):
-        self.mode = mode
-        self.regex = re.compile(pattern, re.MULTILINE)
-        self.current: Optional[str] = None
-
-    def update(self, text: str) -> Optional[str]:
-        if not text:
-            return self.current
-        if self.mode == 'hashtags':
-            tags = re.findall(r'#([\w\-çğıöşüÇĞİÖŞÜ]+)', text)
-            if tags:
-                self.current = tags[0]
-        elif self.mode == 'regex':
-            m = self.regex.search(text.strip())
-            if m:
-                self.current = m.group(1).strip()
-        return self.current
-
-
 def load_state(path: str) -> Dict[str, Any]:
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
-    return {'last_source_id': 0, 'log': []}
+    return {'done_topics': {}, 'log': []}
 
 
 def save_state(path: str, state: Dict[str, Any]) -> None:
@@ -76,14 +52,81 @@ def save_state(path: str, state: Dict[str, Any]) -> None:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-async def ensure_topic(client: TelegramClient, dest, topic_name: str, topic_map: Dict[str, int]) -> Optional[int]:
-    if not TOPIC_MODE:
-        return None
+def load_topic_map(path: str) -> Dict[str, int]:
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def save_topic_map(path: str, mapping: Dict[str, int]) -> None:
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(mapping, f, ensure_ascii=False, indent=2)
+
+
+async def get_forum_topics(client: TelegramClient, dest) -> Dict[str, int]:
+    """Hedef grupta zaten var olan konulari isim->id olarak dondurur."""
+    result = {}
+    try:
+        res = await client(functions.channels.GetForumTopicsRequest(
+            channel=dest, offset_date=0, offset_id=0, offset_topic=0, limit=100
+        ))
+        for t in res.topics:
+            if hasattr(t, 'title'):
+                result[t.title] = t.id
+    except Exception:
+        pass
+    return result
+
+
+async def ensure_topic(client: TelegramClient, dest, topic_name: str, topic_map: Dict[str, int], topic_map_path: str) -> int:
+    """Konu varsa id'sini dondurur, yoksa hedefte forum konusu olusturur."""
     if topic_name in topic_map:
         return topic_map[topic_name]
-    raise RuntimeError(
-        'TOPIC_MODE=true ise topic_map.json içinde bölüm adı -> topic_id eşleşmesi girilmelidir.'
-    )
+    result = await client(functions.channels.CreateForumTopicRequest(
+        channel=dest,
+        title=topic_name[:128],
+        icon_color=0x6FB9F0,
+        random_id=int.from_bytes(os.urandom(8), 'big', signed=True),
+    ))
+    new_topic_id = None
+    for update in result.updates:
+        if isinstance(update, types.UpdateMessageID):
+            new_topic_id = update.id
+            break
+    if new_topic_id is None:
+        for update in result.updates:
+            if hasattr(update, 'message') and hasattr(update.message, 'id'):
+                new_topic_id = update.message.id
+                break
+    if new_topic_id is None:
+        raise RuntimeError(f"Konu olusturulamadi: {topic_name}")
+    topic_map[topic_name] = new_topic_id
+    save_topic_map(topic_map_path, topic_map)
+    await asyncio.sleep(1.0)
+    return new_topic_id
+
+
+async def send_message_to_topic(client: TelegramClient, dest, topic_id: int, message):
+    """Mesaji (medya dahil) hedef grubun belirli konusuna gonderir."""
+    if message.media:
+        return await client.send_file(
+            dest,
+            message.media,
+            caption=message.raw_text or '',
+            reply_to=topic_id,
+            silent=SILENT_FORWARD,
+        )
+    else:
+        text = message.raw_text or ''
+        if not text.strip():
+            return None
+        return await client.send_message(
+            dest,
+            text,
+            reply_to=topic_id,
+            silent=SILENT_FORWARD,
+        )
 
 
 async def main():
@@ -93,132 +136,84 @@ async def main():
     source = await client.get_entity(SOURCE)
     dest = await client.get_entity(DEST)
 
-    tracker = SectionTracker(SECTION_MODE, SECTION_REGEX)
     state = load_state(RESUME_FILE)
-    topic_map = {}
-    if TOPIC_MODE and os.path.exists(TOPIC_MAP_FILE):
-        with open(TOPIC_MAP_FILE, 'r', encoding='utf-8') as f:
-            topic_map = json.load(f)
+    done_topics: Dict[str, bool] = state.get('done_topics', {})
 
-    start_after = state.get('last_source_id', 0)
-    pending_album: List[Any] = []
-    pending_grouped_id = None
+    topic_map = load_topic_map(TOPIC_MAP_FILE)
+    existing_dest_topics = await get_forum_topics(client, dest)
+    for name, tid in existing_dest_topics.items():
+        topic_map.setdefault(name, tid)
+    save_topic_map(TOPIC_MAP_FILE, topic_map)
 
-    async def flush_album():
-        nonlocal pending_album, pending_grouped_id, state
-        if not pending_album:
-            return
+    result = await client(functions.channels.GetForumTopicsRequest(
+        channel=source, offset_date=0, offset_id=0, offset_topic=0, limit=100
+    ))
+    source_topics = [t for t in result.topics if hasattr(t, 'title')]
 
-        first = pending_album[0]
-        text = (first.raw_text or '').strip()
-        section = tracker.update(text)
-        item = ForwardItem(
-            source_id=first.id,
-            date=first.date.isoformat() if isinstance(first.date, datetime) else str(first.date),
-            text_preview=text[:120],
-            grouped_id=pending_grouped_id,
-            section=section,
-            kind='album' if len(pending_album) > 1 else 'single_media'
-        )
+    print(f"Kaynakta {len(source_topics)} konu bulundu.")
 
-        try:
-            if DRY_RUN:
-                item.forwarded = False
-                item.skipped_reason = 'dry_run'
-            else:
-                reply_to = await ensure_topic(client, dest, section, topic_map) if section else None
-                result = await client.forward_messages(
-                    dest,
-                    pending_album,
-                    silent=SILENT_FORWARD,
-                    as_album=True
-                )
-                if reply_to:
-                    item.skipped_reason = f'topic hedefleme için forward yerine resend gerekir; topic_id={reply_to}'
-                item.forwarded = True
-                if isinstance(result, list) and result:
-                    item.dest_id = result[0].id
-                elif result is not None and hasattr(result, 'id'):
-                    item.dest_id = result.id
-                await asyncio.sleep(POST_DELAY_SECONDS)
-        except FloodWaitError as e:
-            save_state(RESUME_FILE, state)
-            raise RuntimeError(f'FloodWait: {e.seconds} saniye beklemen gerekiyor.')
-        except Exception as e:
-            item.forwarded = False
-            item.skipped_reason = str(e)
+    for topic in source_topics:
+        topic_name = topic.title
+        topic_id_source = topic.id
 
-        state['last_source_id'] = max(state.get('last_source_id', 0), max(m.id for m in pending_album))
-        state['log'].append(asdict(item))
-        save_state(RESUME_FILE, state)
-        pending_album = []
-        pending_grouped_id = None
-
-    async for message in client.iter_messages(source, reverse=True, min_id=start_after):
-        if not message:
-            continue
-        gid = getattr(message, 'grouped_id', None)
-        has_media = bool(message.media)
-        text = (message.raw_text or '').strip()
-
-        if gid:
-            if pending_grouped_id is None:
-                pending_grouped_id = gid
-                pending_album = [message]
-            elif gid == pending_grouped_id:
-                pending_album.append(message)
-            else:
-                await flush_album()
-                pending_grouped_id = gid
-                pending_album = [message]
+        if done_topics.get(str(topic_id_source)):
+            print(f"Atlaniyor (tamamlanmis): {topic_name}")
             continue
 
-        if pending_album:
-            await flush_album()
+        print(f"Isleniyor: {topic_name}")
 
-        section = tracker.update(text)
-        kind = 'text' if not has_media else 'single_media'
-        item = ForwardItem(
-            source_id=message.id,
-            date=message.date.isoformat() if isinstance(message.date, datetime) else str(message.date),
-            text_preview=text[:120],
-            grouped_id=None,
-            section=section,
-            kind=kind
-        )
+        if DRY_RUN:
+            print(f"  [DRY_RUN] Konu olusturulacak/kullanilacak: {topic_name}")
+        else:
+            dest_topic_id = await ensure_topic(client, dest, topic_name, topic_map, TOPIC_MAP_FILE)
 
-        try:
-            if DRY_RUN:
+        async for message in client.iter_messages(source, reply_to=topic_id_source, reverse=True):
+            if not message:
+                continue
+            if message.action is not None:
+                continue
+
+            text = (message.raw_text or '').strip()
+            has_media = bool(message.media)
+            kind = 'text' if not has_media else 'media'
+
+            item = ForwardItem(
+                source_id=message.id,
+                topic_id_source=topic_id_source,
+                topic_name=topic_name,
+                date=message.date.isoformat() if isinstance(message.date, datetime) else str(message.date),
+                text_preview=text[:120],
+                kind=kind,
+            )
+
+            try:
+                if DRY_RUN:
+                    item.forwarded = False
+                    item.skipped_reason = 'dry_run'
+                else:
+                    sent = await send_message_to_topic(client, dest, dest_topic_id, message)
+                    item.forwarded = True
+                    if sent is not None and hasattr(sent, 'id'):
+                        item.dest_id = sent.id
+                    await asyncio.sleep(POST_DELAY_SECONDS)
+            except FloodWaitError as e:
+                state['done_topics'] = done_topics
+                save_state(RESUME_FILE, state)
+                raise RuntimeError(f'FloodWait: {e.seconds} saniye beklemen gerekiyor. Sonra scripti tekrar calistir, tamamlanan konular atlanacak.')
+            except Exception as e:
                 item.forwarded = False
-                item.skipped_reason = 'dry_run'
-            else:
-                reply_to = await ensure_topic(client, dest, section, topic_map) if section else None
-                result = await client.forward_messages(
-                    dest,
-                    message,
-                    silent=SILENT_FORWARD
-                )
-                if reply_to:
-                    item.skipped_reason = f'topic hedefleme için forward yerine resend gerekir; topic_id={reply_to}'
-                item.forwarded = True
-                if result is not None and hasattr(result, 'id'):
-                    item.dest_id = result.id
-                await asyncio.sleep(POST_DELAY_SECONDS)
-        except FloodWaitError as e:
+                item.skipped_reason = str(e)
+
+            state.setdefault('log', []).append(asdict(item))
             save_state(RESUME_FILE, state)
-            raise RuntimeError(f'FloodWait: {e.seconds} saniye beklemen gerekiyor.')
-        except Exception as e:
-            item.forwarded = False
-            item.skipped_reason = str(e)
 
-        state['last_source_id'] = max(state.get('last_source_id', 0), message.id)
-        state['log'].append(asdict(item))
-        save_state(RESUME_FILE, state)
-
-    if pending_album:
-        await flush_album()
+        if not DRY_RUN:
+            done_topics[str(topic_id_source)] = True
+            state['done_topics'] = done_topics
+            save_state(RESUME_FILE, state)
 
     await client.disconnect()
+    print('Tamamlandi.')
 
 
 if __name__ == '__main__':
