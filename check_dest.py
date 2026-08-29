@@ -1,11 +1,11 @@
 """
-Hedef Grup Kontrol / Test Scripti
-===================================
+Destination Group Check / Test Script
+========================================
 
-DEST_CHANNEL'da tanımlı hedef grubun bilgilerini gösterir ve gruba
-gerçekten mesaj gönderebildiğinizi doğrulamak için bir test mesajı yollar.
+Shows information about the destination group defined in DEST_CHANNEL and
+sends a test message to confirm you can actually send messages to it.
 
-Kullanım:
+Usage:
     python check_dest.py
 """
 
@@ -32,33 +32,33 @@ async def main():
                 break
 
         if dialog is None:
-            print("Hedef dialoglarda bulunamadı.")
+            print("Destination not found among the dialogs.")
             return
 
         entity = dialog.entity
-        print("Ad:", dialog.name)
+        print("Name:", dialog.name)
         print("ID:", dialog.id)
-        print("Tür:", type(entity).__name__)
-        print("Ham entity:", entity)
+        print("Type:", type(entity).__name__)
+        print("Raw entity:", entity)
 
         chat_id = abs(entity.id)
 
         try:
             full = await client(functions.messages.GetFullChatRequest(chat_id=chat_id))
             chat = full.chats[0]
-            print("\n--- Tam grup bilgisi ---")
+            print("\n--- Full group info ---")
             print("deactivated:", getattr(chat, "deactivated", None))
             print("migrated_to:", getattr(chat, "migrated_to", None))
             print("left:", getattr(chat, "left", None))
             print("kicked:", getattr(chat, "kicked", None))
         except Exception as error:
-            print("GetFullChatRequest hatası:", error)
+            print("GetFullChatRequest error:", error)
 
         try:
-            test_msg = await client.send_message(entity, "🔧 test mesajı")
-            print("\nTest mesajı GÖNDERİLDİ. Mesaj ID:", test_msg.id)
+            test_msg = await client.send_message(entity, "🔧 test message")
+            print("\nTest message SENT. Message ID:", test_msg.id)
         except Exception as error:
-            print("\nTest mesajı BAŞARISIZ:", error)
+            print("\nTest message FAILED:", error)
 
 
 if __name__ == "__main__":

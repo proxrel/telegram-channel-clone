@@ -1,11 +1,11 @@
 """
-Grup/Kanal ID Bulucu
-=====================
+Group/Channel ID Finder
+=========================
 
-Hesabınızın üye olduğu tüm GRUP sohbetlerini (kanal değil) listeler.
-SOURCE_CHANNEL / DEST_CHANNEL değerlerini bulmak için kullanın.
+Lists every GROUP chat (not channel) your account is a member of.
+Use it to find your SOURCE_CHANNEL / DEST_CHANNEL values.
 
-Kullanım:
+Usage:
     python list_ids.py
 """
 
@@ -27,40 +27,40 @@ async def main():
     await client.connect()
 
     if not await client.is_user_authorized():
-        phone = input("Telefon numaran (+90...): ").strip()
+        phone = input("Your phone number (+1...): ").strip()
         await client.send_code_request(phone)
 
-        code = input("Telegram kodu: ").strip()
+        code = input("Telegram code: ").strip()
 
         try:
             await client.sign_in(phone, code)
         except Exception as error:
             if error.__class__.__name__ == "SessionPasswordNeededError":
-                password = input("2FA parolan: ")
+                password = input("Your 2FA password: ")
                 await client.sign_in(password=password)
             else:
                 raise
 
-    print("\n--- Yalnızca grup sohbetleri ---\n")
+    print("\n--- Group chats only ---\n")
 
-    grup_sayisi = 0
+    group_count = 0
 
     async for dialog in client.iter_dialogs():
         if not dialog.is_group:
             continue
 
-        grup_sayisi += 1
+        group_count += 1
         entity = dialog.entity
         username = getattr(entity, "username", None)
 
         print("-" * 65)
-        print(f"Grup adı : {dialog.name}")
-        print(f"Grup ID  : {dialog.id}")
-        print(f"Username : @{username}" if username else "Username : yok")
-        print(f"Tür      : {type(entity).__name__}")
+        print(f"Group name: {dialog.name}")
+        print(f"Group ID  : {dialog.id}")
+        print(f"Username  : @{username}" if username else "Username  : none")
+        print(f"Type      : {type(entity).__name__}")
 
     print("-" * 65)
-    print(f"Toplam grup sayısı: {grup_sayisi}")
+    print(f"Total groups: {group_count}")
 
     await client.disconnect()
 

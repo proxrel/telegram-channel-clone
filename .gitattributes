@@ -1,4 +1,4 @@
-# Satır sonlarını normalize et (Windows/Mac/Linux arası tutarlılık için)
+# Normalize line endings (for consistency across Windows/Mac/Linux)
 * text=auto eol=lf
 
 *.py text eol=lf
@@ -8,5 +8,5 @@
 *.gitignore text eol=lf
 *.gitattributes text eol=lf
 
-# Binary dosyalar (varsa) diff/merge'e girmesin
+# Keep binary files (if any) out of diff/merge
 *.session binary

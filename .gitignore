@@ -1,4 +1,4 @@
-# --- Hassas veriler / kişisel yapılandırma ---
+# --- Sensitive data / personal configuration ---
 .env
 *.session
 *.session-journal
@@ -29,7 +29,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# --- Sanal ortamlar ---
+# --- Virtual environments ---
 .env
 .envrc
 .venv
@@ -54,15 +54,15 @@ coverage.xml
 .pytest_cache/
 cover/
 
-# --- Loglar ---
+# --- Logs ---
 *.log
 
-# --- Editör / IDE ---
+# --- Editor / IDE ---
 .vscode/
 .idea/
 tempCodeRunnerFile.py
 
-# --- Diğer ---
+# --- Other ---
 .mypy_cache/
 .dmypy.json
 dmypy.json

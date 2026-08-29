@@ -18,10 +18,9 @@ Open a new entry in [Issues](../../issues). Please include:
    git checkout -b feature/short-description
    ```
 2. Make your changes. Try to stay consistent with the existing code style
-   (docstrings, `snake_case` naming). Console messages are in Turkish by
-   design, since that's the target audience for this tool — please keep new
-   user-facing console output in Turkish for consistency, unless discussed
-   otherwise in an issue.
+   (docstrings, `snake_case` naming). Console messages are in English —
+   please keep new user-facing console output in English for consistency,
+   unless discussed otherwise in an issue.
 3. Before submitting, make sure the files still compile:
    ```bash
    python -m py_compile main.py list_ids.py check_dest.py

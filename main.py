@@ -1,11 +1,11 @@
 """
-Telegram Channel/Group Cloner (Forum/Topic destekli)
+Telegram Channel/Group Cloner (Forum/Topic support)
 =====================================================
 
-Bir kaynak Telegram grubundaki (forum/topic özellikli süpergrup) tüm konu
-başlıklarını ve mesajlarını, hedef bir forum grubuna sırayla kopyalar.
+Copies every topic and its messages from a source Telegram group
+(a forum/topic-enabled supergroup) to a destination forum group, in order.
 
-Kullanım kılavuzu için README.md dosyasına bakın.
+See README.md for the usage guide.
 """
 
 import os
@@ -45,8 +45,8 @@ RESUME_FILE = os.getenv("RESUME_FILE", "state.json").strip()
 POST_DELAY_SECONDS = float(os.getenv("POST_DELAY_SECONDS", "0.8"))
 TOPIC_MAP_FILE = os.getenv("TOPIC_MAP_FILE", "topic_map.json").strip()
 
-# Dosya/medya içermeyen medya türleri (link önizlemesi, anket, konum vb.)
-# Bunlar "gerçek dosya" olarak değil, düz metin olarak gönderilir.
+# Media types that don't carry a real file/media (link preview, poll, location, etc.)
+# These are sent as plain text rather than as a "real file".
 NON_FILE_MEDIA = (
     MessageMediaWebPage,
     MessageMediaPoll,
@@ -60,7 +60,7 @@ NON_FILE_MEDIA = (
 
 
 def parse_peer(value: str):
-    """'-100123...' gibi sayısal ID'leri int'e çevirir, @kullaniciadi'nı olduğu gibi bırakır."""
+    """Converts numeric IDs like '-100123...' to int, leaves @username as-is."""
     value = value.strip()
 
     if value.lstrip("-").isdigit():
@@ -74,8 +74,8 @@ DEST = parse_peer(DEST_RAW)
 
 if not API_ID or not API_HASH or not SOURCE_RAW or not DEST_RAW:
     raise SystemExit(
-        "API_ID, API_HASH, SOURCE_CHANNEL ve DEST_CHANNEL zorunlu. "
-        ".env dosyanızı kontrol edin (bkz. .env.example)."
+        "API_ID, API_HASH, SOURCE_CHANNEL and DEST_CHANNEL are required. "
+        "Check your .env file (see .env.example)."
     )
 
 
@@ -98,7 +98,7 @@ def load_json(path: str, default):
             with open(path, "r", encoding="utf-8") as file:
                 return json.load(file)
         except (OSError, json.JSONDecodeError):
-            print(f"Uyarı: {path} okunamadı; varsayılan değer kullanılıyor.")
+            print(f"Warning: could not read {path}; using default value.")
 
     return default
 
@@ -128,21 +128,21 @@ def save_topic_map(path: str, mapping: Dict[str, int]) -> None:
 
 
 async def login_if_needed(client: TelegramClient) -> None:
-    """Oturum dosyası yoksa veya geçersizse, kullanıcıdan telefon/kod/2FA ister."""
+    """Prompts for phone/code/2FA if there's no session file yet, or it's invalid."""
     await client.connect()
 
     if await client.is_user_authorized():
         return
 
-    phone = input("Telefon numaran (+90...): ").strip()
+    phone = input("Your phone number (+1...): ").strip()
     await client.send_code_request(phone)
 
-    code = input("Telegram kodu: ").strip()
+    code = input("Telegram code: ").strip()
 
     try:
         await client.sign_in(phone=phone, code=code)
     except SessionPasswordNeededError:
-        password = input("2FA parolan: ")
+        password = input("Your 2FA password: ")
         await client.sign_in(password=password)
 
 
@@ -156,8 +156,8 @@ async def find_dialog(
             return dialog
 
     raise RuntimeError(
-        f"{label} bulunamadı: {wanted_id}. "
-        "Hesabın gruba üye olduğundan ve ID'nin doğru olduğundan emin ol."
+        f"{label} not found: {wanted_id}. "
+        "Make sure the account is a member of the group and the ID is correct."
     )
 
 
@@ -174,15 +174,15 @@ async def get_source_topics(client: TelegramClient, source):
         )
     except Exception as error:
         raise RuntimeError(
-            "Kaynak gruptaki forum konuları okunamadı. "
-            "Kaynak grubun Topics/Forum açık bir süpergrup olduğundan emin ol."
+            "Could not read forum topics from the source group. "
+            "Make sure the source group is a supergroup with Topics/Forum enabled."
         ) from error
 
     return [topic for topic in response.topics if hasattr(topic, "title")]
 
 
 async def get_dest_topics(client: TelegramClient, destination) -> Dict[str, int]:
-    """Hedefteki mevcut konu başlıklarını isim -> topic_id biçiminde döndürür."""
+    """Returns the destination's existing topics as name -> topic_id."""
     result: Dict[str, int] = {}
 
     try:
@@ -213,7 +213,7 @@ async def ensure_dest_topic(
     topic_map: Dict[str, int],
     topic_map_path: str,
 ) -> int:
-    """Hedefte konu varsa ID'sini döndürür; yoksa yeni konu oluşturur."""
+    """Returns the topic's ID if it already exists at the destination; otherwise creates it."""
     if topic_name in topic_map:
         return topic_map[topic_name]
 
@@ -241,7 +241,7 @@ async def ensure_dest_topic(
                 break
 
     if new_topic_id is None:
-        raise RuntimeError(f"Hedefte konu oluşturulamadı: {topic_name}")
+        raise RuntimeError(f"Could not create topic at destination: {topic_name}")
 
     topic_map[topic_name] = new_topic_id
     save_topic_map(topic_map_path, topic_map)
@@ -285,43 +285,43 @@ async def send_content(
 async def main():
     if not isinstance(SOURCE, int):
         raise RuntimeError(
-            "SOURCE_CHANNEL sayısal kaynak grup ID'si olmalı (örn. -100123456789)."
+            "SOURCE_CHANNEL must be a numeric source group ID (e.g. -100123456789)."
         )
 
     if not isinstance(DEST, int):
         raise RuntimeError(
-            "DEST_CHANNEL sayısal hedef grup ID'si olmalı (örn. -100123456789)."
+            "DEST_CHANNEL must be a numeric destination group ID (e.g. -100123456789)."
         )
 
-    print("Telegram bağlantısı hazırlanıyor...")
-    print(f"Kaynak: {SOURCE}")
-    print(f"Hedef : {DEST}")
+    print("Preparing the Telegram connection...")
+    print(f"Source: {SOURCE}")
+    print(f"Destination: {DEST}")
     print(f"DRY_RUN: {DRY_RUN}")
     print()
 
     async with TelegramClient(SESSION_NAME, API_ID, API_HASH) as client:
         await login_if_needed(client)
 
-        source_dialog = await find_dialog(client, SOURCE, "Kaynak grup")
-        destination_dialog = await find_dialog(client, DEST, "Hedef grup")
+        source_dialog = await find_dialog(client, SOURCE, "Source group")
+        destination_dialog = await find_dialog(client, DEST, "Destination group")
 
         source = source_dialog.entity
         destination = destination_dialog.entity
 
         if not isinstance(source, Channel):
-            raise RuntimeError("Kaynak grup Channel/süpergrup türünde olmalı.")
+            raise RuntimeError("The source group must be a Channel/supergroup.")
 
         if not isinstance(destination, Channel) or not getattr(
             destination, "forum", False
         ):
             raise RuntimeError(
-                "Hedef grup Topics/Forum özelliği açık bir süpergrup olmalı."
+                "The destination group must be a supergroup with Topics/Forum enabled."
             )
 
-        print("Kaynak ve hedef başarıyla bulundu.")
-        print(f"Kaynak adı : {source_dialog.name}")
-        print(f"Hedef adı  : {destination_dialog.name}")
-        print(f"Hedef forum: {destination.forum}")
+        print("Source and destination found successfully.")
+        print(f"Source name: {source_dialog.name}")
+        print(f"Destination name: {destination_dialog.name}")
+        print(f"Destination forum: {destination.forum}")
 
         state = load_state(RESUME_FILE)
         done_topics = state.setdefault("done_topics", {})
@@ -336,7 +336,7 @@ async def main():
 
         source_topics = await get_source_topics(client, source)
 
-        print(f"Kaynakta {len(source_topics)} konu bulundu.")
+        print(f"Found {len(source_topics)} topics in the source.")
 
         for topic in source_topics:
             topic_name = topic.title
@@ -344,15 +344,15 @@ async def main():
             topic_key = str(source_topic_id)
 
             if done_topics.get(topic_key):
-                print(f"Atlanıyor (tamamlanmış): {topic_name}")
+                print(f"Skipping (already done): {topic_name}")
                 continue
 
-            print(f"\nİşleniyor: {topic_name}")
+            print(f"\nProcessing: {topic_name}")
 
             if DRY_RUN:
                 dest_topic_id = None
                 print(
-                    f"  [DRY_RUN] Hedefte kullanılacak/oluşturulacak konu: "
+                    f"  [DRY_RUN] Topic to use/create at destination: "
                     f"{topic_name}"
                 )
             else:
@@ -364,17 +364,17 @@ async def main():
                         topic_map,
                         TOPIC_MAP_FILE,
                     )
-                    print(f"  Hedef konu ID: {dest_topic_id}")
+                    print(f"  Destination topic ID: {dest_topic_id}")
 
                 except FloodWaitError as error:
                     save_state(RESUME_FILE, state)
                     raise RuntimeError(
-                        f"FloodWait: {error.seconds} saniye beklemen gerekiyor."
+                        f"FloodWait: you need to wait {error.seconds} seconds."
                     ) from error
 
                 except Exception as error:
                     raise RuntimeError(
-                        f"Hedefte konu oluşturulamadı: {topic_name}. Hata: {error}"
+                        f"Could not create topic at destination: {topic_name}. Error: {error}"
                     ) from error
 
             message_count = 0
@@ -410,7 +410,7 @@ async def main():
 
                 if done_messages.get(message_key):
                     skipped_count += 1
-                    print(f"  Atlanıyor (gönderilmiş): #{message.id}")
+                    print(f"  Skipping (already sent): #{message.id}")
                     continue
 
                 if DRY_RUN:
@@ -440,30 +440,30 @@ async def main():
                     except FloodWaitError as error:
                         save_state(RESUME_FILE, state)
                         raise RuntimeError(
-                            f"FloodWait: {error.seconds} saniye beklemen gerekiyor. "
-                            "Süre dolunca aynı komutu tekrar çalıştırabilirsin."
+                            f"FloodWait: you need to wait {error.seconds} seconds. "
+                            "You can run the same command again once it's over."
                         ) from error
 
                     except Exception as error:
                         item.forwarded = False
                         item.skipped_reason = str(error)
                         print(
-                            f"  [HATA] Mesaj #{message.id} gönderilemedi: {error}"
+                            f"  [ERROR] Could not send message #{message.id}: {error}"
                         )
 
                 state.setdefault("log", []).append(asdict(item))
                 save_state(RESUME_FILE, state)
 
             print(
-                f"  Konudaki toplam mesaj: {message_count} | "
-                f"Gönderilen: {sent_count} | Atlanan: {skipped_count}"
+                f"  Total messages in topic: {message_count} | "
+                f"Sent: {sent_count} | Skipped: {skipped_count}"
             )
 
             if not DRY_RUN:
                 done_topics[topic_key] = True
                 save_state(RESUME_FILE, state)
 
-    print("\nTamamlandı.")
+    print("\nDone.")
 
 
 if __name__ == "__main__":
