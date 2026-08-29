@@ -1,34 +1,37 @@
-# Katkıda Bulunma
+# Contributing
 
-Katkılarınız için teşekkürler! Küçük bir proje olduğu için süreç basit tutulmuştur.
+Thanks for your interest in contributing! This is a small project, so the process is kept simple.
 
-## Hata bildirimi / öneri
+## Reporting bugs / suggestions
 
-[Issues](../../issues) sekmesinden yeni bir kayıt açabilirsiniz. Lütfen şunları belirtin:
+Open a new entry in [Issues](../../issues). Please include:
 
-- Ne yapmaya çalıştığınız
-- Beklediğiniz sonuç ile gerçekleşen sonuç
-- Varsa hata mesajının tamamı (API_ID, API_HASH gibi kişisel bilgileri **paylaşmayın**)
-- Python sürümünüz ve işletim sisteminiz
+- What you were trying to do
+- Expected vs. actual result
+- The full error message, if any (please **do not** share personal info like your `API_ID` or `API_HASH`)
+- Your Python version and operating system
 
-## Kod katkısı (Pull Request)
+## Code contributions (Pull Requests)
 
-1. Depoyu fork'layın ve yeni bir dal (branch) oluşturun:
+1. Fork the repository and create a new branch:
    ```bash
-   git checkout -b ozellik/kisa-aciklama
+   git checkout -b feature/short-description
    ```
-2. Değişikliklerinizi yapın. Mevcut kod stiline (Türkçe konsol mesajları,
-   docstring'ler, `snake_case` isimlendirme) sadık kalmaya çalışın.
-3. Değişiklik yapmadan önce dosyaların derlendiğinden emin olun:
+2. Make your changes. Try to stay consistent with the existing code style
+   (docstrings, `snake_case` naming). Console messages are in Turkish by
+   design, since that's the target audience for this tool — please keep new
+   user-facing console output in Turkish for consistency, unless discussed
+   otherwise in an issue.
+3. Before submitting, make sure the files still compile:
    ```bash
    python -m py_compile main.py list_ids.py check_dest.py
    ```
-4. Commit'lerinizde **asla** kendi `.env`, `.session`, `state.json` veya
-   `topic_map.json` dosyalarınızı eklemeyin (bunlar zaten `.gitignore`'dadır,
-   yine de `git status` ile kontrol edin).
-5. Pull request açıklamasında neyi, neden değiştirdiğinizi kısaca yazın.
+4. **Never** commit your own `.env`, `.session`, `state.json`, or
+   `topic_map.json` files (these are already in `.gitignore`, but double-check
+   with `git status` anyway).
+5. In your pull request description, briefly explain what you changed and why.
 
-## Güvenlikle ilgili bir açık bulduysanız
+## Reporting a security issue
 
-Lütfen doğrudan bir Issue açmak yerine repo sahibiyle özel olarak iletişime
-geçin.
+Please don't open a public Issue for security vulnerabilities. Instead,
+contact the repository owner directly.
