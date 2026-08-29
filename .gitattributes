@@ -1,0 +1,12 @@
+# Satır sonlarını normalize et (Windows/Mac/Linux arası tutarlılık için)
+* text=auto eol=lf
+
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Binary dosyalar (varsa) diff/merge'e girmesin
+*.session binary
