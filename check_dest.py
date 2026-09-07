@@ -1,14 +1,3 @@
-"""
-Destination Group Check / Test Script
-========================================
-
-Shows information about the destination group defined in DEST_CHANNEL and
-sends a test message to confirm you can actually send messages to it.
-
-Usage:
-    python check_dest.py
-"""
-
 import os
 import asyncio
 from dotenv import load_dotenv
@@ -18,7 +7,7 @@ load_dotenv(".env")
 
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "").strip()
-SESSION_NAME = os.getenv("SESSION_NAME", "channel_forwarder").strip()
+SESSION_NAME = os.getenv("SESSION_NAME", "id_bulucu").strip()
 DEST = int(os.getenv("DEST_CHANNEL", "0").strip())
 
 
@@ -32,33 +21,33 @@ async def main():
                 break
 
         if dialog is None:
-            print("Destination not found among the dialogs.")
+            print("Hedef dialoglarda bulunamadı.")
             return
 
         entity = dialog.entity
-        print("Name:", dialog.name)
+        print("Ad:", dialog.name)
         print("ID:", dialog.id)
-        print("Type:", type(entity).__name__)
-        print("Raw entity:", entity)
+        print("Tür:", type(entity).__name__)
+        print("Ham entity:", entity)
 
         chat_id = abs(entity.id)
 
         try:
             full = await client(functions.messages.GetFullChatRequest(chat_id=chat_id))
             chat = full.chats[0]
-            print("\n--- Full group info ---")
+            print("\n--- Tam grup bilgisi ---")
             print("deactivated:", getattr(chat, "deactivated", None))
             print("migrated_to:", getattr(chat, "migrated_to", None))
             print("left:", getattr(chat, "left", None))
             print("kicked:", getattr(chat, "kicked", None))
         except Exception as error:
-            print("GetFullChatRequest error:", error)
+            print("GetFullChatRequest hatası:", error)
 
         try:
-            test_msg = await client.send_message(entity, "🔧 test message")
-            print("\nTest message SENT. Message ID:", test_msg.id)
+            test_msg = await client.send_message(entity, "🔧 test mesajı")
+            print("\nTest mesajı GÖNDERİLDİ. Mesaj ID:", test_msg.id)
         except Exception as error:
-            print("\nTest message FAILED:", error)
+            print("\nTest mesajı BAŞARISIZ:", error)
 
 
 if __name__ == "__main__":
