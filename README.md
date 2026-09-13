@@ -67,18 +67,21 @@ ihtiyaç duyar. Ücretsizdir ve hesabına özeldir.
 
 ## Kullanım
 
-### 1. Grup ID'lerini bul
+### Adım 1 — Önce kaynak ve hedef grubun ID'sini bul
 
-Hangi grubun kaynak, hangisinin hedef olacağını bilmiyorsan önce:
+Kaynak ve iletilecek grubun ID'sini bulmak için önce bu komutu çalıştır ve
+çıkan grup ID'lerini not al:
 
 ```bash
 python list_ids.py
 ```
 
-Bu da API_ID/API_HASH'i (henüz kaydetmediysen) sorar, ardından telefon
-numaranı ve kodunu ister, üye olduğun tüm grupları ID'leriyle listeler.
+API_ID/API_HASH'i henüz kaydetmediysen önce onları sorar, ardından telefon
+numaranı ve kodunu ister, sonunda üye olduğun tüm grupları ID'leriyle
+listeler. Kaynak ve hedef olacak grupların ID'lerini buradan not al —
+bir sonraki adımda lazım olacak.
 
-### 2. Script'i çalıştır
+### Adım 2 — main.py'yi çalıştır
 
 ```bash
 python main.py
@@ -88,8 +91,8 @@ python main.py
 bir daha sormayacak:
 
 - `API_ID`, `API_HASH`
-- Kaynak grup ID'si (`SOURCE_CHANNEL`)
-- Hedef grup ID'si (`DEST_CHANNEL`)
+- Kaynak grup ID'si (`SOURCE_CHANNEL`) — Adım 1'de not aldığın ID
+- Hedef grup ID'si (`DEST_CHANNEL`) — Adım 1'de not aldığın ID
 
 Ardından hesabına giriş için telefon numaranı ve Telegram'dan gelen kodu
 (varsa 2FA şifreni) isteyecek.
@@ -103,7 +106,7 @@ Script kesilirse (flood wait, bağlantı kopması, elle durdurma), aynı
 komutu tekrar çalıştırman yeterli; `state.json` sayesinde hiçbir mesaj iki
 kez gönderilmez.
 
-### 3. Hedefi test et (opsiyonel)
+### Adım 3 — Hedefi test et (opsiyonel)
 
 ```bash
 python check_dest.py
