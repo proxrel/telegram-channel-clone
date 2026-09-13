@@ -449,6 +449,30 @@ async def send_content(
     )
 
 
+def topic_has_unresolved_failures(
+    source_topic_id: int,
+    state: Dict[str, Any],
+) -> bool:
+    """
+    Bu konuda daha önce gönderilmeye çalışılıp başarısız olan ve hâlâ
+    (done_messages'a göre) gerçekten gönderilmemiş bir mesaj var mı diye
+    bakar. Varsa, konu 'tamamlandı' olarak işaretlenmiş olsa bile eksik
+    mesajların yeniden denenmesi için konu atlanmaz.
+    """
+    done_messages = state.get("done_messages", {})
+    for entry in state.get("log", []):
+        if entry.get("topic_id_source") != source_topic_id:
+            continue
+        if entry.get("skipped_reason") == "dry_run":
+            continue
+        if entry.get("forwarded"):
+            continue
+        message_key = f"{source_topic_id}:{entry.get('source_id')}"
+        if not done_messages.get(message_key):
+            return True
+    return False
+
+
 async def main():
     if not isinstance(SOURCE, int):
         raise RuntimeError("SOURCE_CHANNEL sayısal kaynak grup ID'si olmalı.")
@@ -516,8 +540,14 @@ async def main():
             topic_key = str(source_topic_id)
 
             if done_topics.get(topic_key):
-                print(f"Atlanıyor (tamamlanmış): {topic_name}")
-                continue
+                if not topic_has_unresolved_failures(source_topic_id, state):
+                    print(f"Atlanıyor (tamamlanmış): {topic_name}")
+                    continue
+                print(
+                    f"'{topic_name}' konusu tamamlanmış görünüyordu ama "
+                    "eksik/başarısız gönderilmiş mesaj(lar) var — "
+                    "kontrol edilip eksikler tekrar denenecek."
+                )
 
             print(f"\nİşleniyor: {topic_name}")
 
@@ -551,6 +581,7 @@ async def main():
             message_count = 0
             sent_count = 0
             skipped_count = 0
+            topic_had_failure = False
 
             async for message in client.iter_messages(
                 source,
@@ -611,6 +642,7 @@ async def main():
                     except Exception as error:
                         item.forwarded = False
                         item.skipped_reason = str(error)
+                        topic_had_failure = True
                         print(
                             f" [HATA] Mesaj #{message.id} gönderilemedi: "
                             f"{type(error).__name__}: {error}"
@@ -626,7 +658,17 @@ async def main():
             )
 
             if not DRY_RUN:
-                done_topics[topic_key] = True
+                if not topic_had_failure and not topic_has_unresolved_failures(
+                    source_topic_id, state
+                ):
+                    done_topics[topic_key] = True
+                else:
+                    done_topics.pop(topic_key, None)
+                    print(
+                        f" '{topic_name}' konusunda hâlâ gönderilememiş "
+                        "mesaj(lar) var; bir sonraki çalıştırmada tekrar "
+                        "denenecek."
+                    )
                 save_state(RESUME_FILE, state)
 
     print("\nTamamlandı.")
