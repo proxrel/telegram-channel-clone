@@ -77,6 +77,7 @@ RESUME_FILE = os.getenv("RESUME_FILE", "state.json").strip()
 POST_DELAY_SECONDS = float(os.getenv("POST_DELAY_SECONDS", "0.8"))
 TOPIC_MAP_FILE = os.getenv("TOPIC_MAP_FILE", "topic_map.json").strip()
 TOPIC_PAGE_SIZE = min(max(int(os.getenv("TOPIC_PAGE_SIZE", "100")), 1), 100)
+VERIFY_WAIT_SECONDS = float(os.getenv("VERIFY_WAIT_SECONDS", "1.5"))
 
 NON_FILE_MEDIA = (
     MessageMediaWebPage,
@@ -449,6 +450,38 @@ async def send_content(
     )
 
 
+async def verify_sent(
+    client: TelegramClient,
+    destination,
+    sent,
+    expected_kind: str,
+) -> bool:
+    """
+    Gönderildi denen mesajın hedefte gerçekten var olup olmadığını
+    kontrol eder. Telegram tarafında gecikme olabileceği için kısa bir
+    bekleme sonrası mesajı tekrar çeker.
+    """
+    if sent is None or not hasattr(sent, "id"):
+        return False
+
+    await asyncio.sleep(VERIFY_WAIT_SECONDS)
+
+    try:
+        fetched = await client.get_messages(destination, ids=sent.id)
+    except FloodWaitError:
+        raise
+    except Exception:
+        return False
+
+    if fetched is None:
+        return False
+
+    if expected_kind == "media" and not fetched.media:
+        return False
+
+    return True
+
+
 def topic_has_unresolved_failures(
     source_topic_id: int,
     state: Dict[str, Any],
@@ -463,7 +496,7 @@ def topic_has_unresolved_failures(
     for entry in state.get("log", []):
         if entry.get("topic_id_source") != source_topic_id:
             continue
-        if entry.get("skipped_reason") == "dry_run":
+        if entry.get("skipped_reason") in ("dry_run", "empty_content"):
             continue
         if entry.get("forwarded"):
             continue
@@ -613,12 +646,12 @@ async def main():
 
                 if done_messages.get(message_key):
                     skipped_count += 1
-                    print(f" Atlanıyor (gönderilmiş): #{message.id}")
+                    print(f" Atlandı (gönderilmiş): #{message.id}")
                     continue
 
                 if DRY_RUN:
                     item.skipped_reason = "dry_run"
-                    print(f" [DRY_RUN] #{message.id} | {kind} | {text[:80]!r}")
+                    print(f" [DRY_RUN] Atlandı: #{message.id} | {kind} | {text[:80]!r}")
                 else:
                     try:
                         sent = await send_content(
@@ -627,11 +660,35 @@ async def main():
                             dest_topic_id,
                             message,
                         )
-                        item.forwarded = True
-                        if sent is not None and hasattr(sent, "id"):
-                            item.dest_id = sent.id
-                        done_messages[message_key] = True
-                        sent_count += 1
+
+                        if sent is None:
+                            # Gönderilecek gerçek içerik yok (boş metin/desteklenmeyen medya).
+                            item.forwarded = False
+                            item.skipped_reason = "empty_content"
+                            done_messages[message_key] = True
+                            skipped_count += 1
+                            print(f" Atlandı (boş içerik): #{message.id}")
+                        else:
+                            verified = await verify_sent(
+                                client,
+                                destination,
+                                sent,
+                                kind,
+                            )
+                            if verified:
+                                item.forwarded = True
+                                item.dest_id = sent.id
+                                done_messages[message_key] = True
+                                sent_count += 1
+                            else:
+                                item.forwarded = False
+                                item.skipped_reason = "verify_failed"
+                                topic_had_failure = True
+                                print(
+                                    f" [HATA] Mesaj #{message.id} gönderildi göründü "
+                                    "ama hedefte doğrulanamadı; tekrar denenecek."
+                                )
+
                         await asyncio.sleep(POST_DELAY_SECONDS)
                     except FloodWaitError as error:
                         save_state(RESUME_FILE, state)
