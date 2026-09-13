@@ -1,15 +1,17 @@
 import os
 import json
 import asyncio
+import mimetypes
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from dotenv import load_dotenv, set_key
 from telethon import TelegramClient, functions, types
 from telethon.errors import FloodWaitError, SessionPasswordNeededError
 from telethon.tl.types import (
     Channel,
+    DocumentAttributeFilename,
     MessageMediaWebPage,
     MessageMediaPoll,
     MessageMediaGeo,
@@ -160,6 +162,77 @@ def load_topic_map(path: str) -> Dict[str, int]:
 
 def save_topic_map(path: str, mapping: Dict[str, int]) -> None:
     save_json(path, mapping)
+
+
+def print_progress(
+    topic_name: str,
+    message_count: int,
+    sent_count: int,
+    skipped_count: int,
+) -> None:
+    """
+    Her mesaj için ayrı bir "Atlandı" satırı basmak yerine, tek bir
+    satırı sürekli güncelleyerek ilerlemeyi gösterir. Böylece konsol
+    onlarca/yüzlerce "Atlandı: #123" yazısıyla dolup taşmaz; sadece
+    anlık sayaçları görürsün. Hatalar hâlâ ayrı satırda basılır.
+    """
+    short_name = (topic_name[:28] + "…") if len(topic_name) > 28 else topic_name
+    print(
+        f"\r  [{short_name:<29}] işlenen: {message_count} "
+        f"| gönderilen: {sent_count} | atlanan: {skipped_count}   ",
+        end="",
+        flush=True,
+    )
+
+
+def extract_filename(message) -> Optional[str]:
+    """
+    Mesajdaki dosyanın orijinal adını bulur. Belgede zaten bir
+    DocumentAttributeFilename varsa onu kullanır. Kameradan doğrudan
+    çekilip gönderilmiş video/ses gibi orijinal bir dosya adı taşımayan
+    içerikler için tarih + mesaj ID'sinden okunabilir bir isim üretir.
+    Fotoğraflarda (document taşımadıkları için) None döner.
+    """
+    document = getattr(message.media, "document", None)
+    if document is None:
+        return None
+
+    for attribute in document.attributes:
+        if isinstance(attribute, DocumentAttributeFilename) and attribute.file_name:
+            return attribute.file_name
+
+    mime = getattr(document, "mime_type", "") or ""
+    extension = mimetypes.guess_extension(mime) or ""
+    if isinstance(message.date, datetime):
+        timestamp = message.date.strftime("%Y%m%d_%H%M%S")
+    else:
+        timestamp = str(message.id)
+    return f"dosya_{timestamp}_{message.id}{extension}"
+
+
+def build_send_attributes(document, filename: Optional[str]):
+    """
+    Orijinal belgenin tüm özelliklerini (video süresi, ses uzunluğu vb.)
+    korurken dosya adını açıkça ekler/değiştirir. Bu sayede hem dosya
+    doğru türde (video/ses) görünmeye devam eder hem de dosya adı
+    hedefe taşınır.
+    """
+    if document is None or not filename:
+        return None
+
+    attributes = []
+    filename_replaced = False
+    for attribute in document.attributes:
+        if isinstance(attribute, DocumentAttributeFilename):
+            attributes.append(DocumentAttributeFilename(file_name=filename))
+            filename_replaced = True
+        else:
+            attributes.append(attribute)
+
+    if not filename_replaced:
+        attributes.append(DocumentAttributeFilename(file_name=filename))
+
+    return attributes
 
 
 async def login_if_needed(client: TelegramClient) -> None:
@@ -423,6 +496,11 @@ async def send_content(
     Kaynak mesajın içeriğini hedef topic'e yollar.
     reply_to=dest_topic_id forum topic başlangıç mesajına yanıt olarak
     gönderim yapar; Telegram bunu ilgili topic içinde gösterir.
+
+    Dosya adı düzeltmesi: video/ses/belge gibi içeriklerde orijinal
+    dosya adı bulunur (yoksa okunabilir bir isim üretilir) ve hem
+    dosyanın kendi özelliklerine (attributes) hem de altyazıya (caption)
+    eklenir; böylece hedefte dosya adı görünür olur.
     """
     text = message.raw_text or ""
     has_real_file_media = (
@@ -431,10 +509,19 @@ async def send_content(
     )
 
     if has_real_file_media:
+        document = getattr(message.media, "document", None)
+        filename = extract_filename(message)
+        attributes = build_send_attributes(document, filename)
+
+        caption = text
+        if filename:
+            caption = f"📎 {filename}\n\n{text}" if text else f"📎 {filename}"
+
         return await client.send_file(
             entity=destination,
             file=message.media,
-            caption=text,
+            caption=caption,
+            attributes=attributes,
             reply_to=dest_topic_id,
             silent=SILENT_FORWARD,
         )
@@ -504,6 +591,183 @@ def topic_has_unresolved_failures(
         if not done_messages.get(message_key):
             return True
     return False
+
+
+def fingerprint_source_message(message) -> Optional[Tuple]:
+    """
+    Bir kaynak mesajın "olması gereken" içeriğini özetler:
+    metinler için tam metin, dosyalar için (boyut, mime türü).
+    Bu özet, hedefteki mesajla karşılaştırılıp doğru dosyanın gidip
+    gitmediğini anlamak için kullanılır. Gönderilecek hiçbir şey yoksa
+    (boş metin, desteklenmeyen medya vb.) None döner.
+    """
+    text = (message.raw_text or "").strip()
+    has_real_file_media = (
+        bool(message.media)
+        and not isinstance(message.media, NON_FILE_MEDIA)
+    )
+    if has_real_file_media:
+        document = getattr(message.media, "document", None)
+        size = getattr(document, "size", None) if document else None
+        mime = getattr(document, "mime_type", None) if document else None
+        return ("media", size, mime)
+    if text:
+        return ("text", text)
+    return None
+
+
+def fingerprint_dest_message(message) -> Optional[Tuple]:
+    """fingerprint_source_message ile aynı mantık, hedefteki mesaj için."""
+    if message is None:
+        return None
+    text = (message.raw_text or "").strip()
+    if message.media and not isinstance(message.media, NON_FILE_MEDIA):
+        document = getattr(message.media, "document", None)
+        size = getattr(document, "size", None) if document else None
+        mime = getattr(document, "mime_type", None) if document else None
+        return ("media", size, mime)
+    if text:
+        return ("text", text)
+    return None
+
+
+def fingerprints_match(expected: Optional[Tuple], actual: Optional[Tuple]) -> bool:
+    if expected is None:
+        return True
+    if actual is None:
+        return False
+    if expected[0] != actual[0]:
+        return False
+    if expected[0] == "text":
+        return expected[1] == actual[1]
+    # medya: boyut ve mime türü eşleşiyorsa doğru dosya kabul edilir
+    return expected[1] == actual[1] and expected[2] == actual[2]
+
+
+async def audit_and_repair_topic(
+    client: TelegramClient,
+    source,
+    destination,
+    source_topic_id: int,
+    topic_name: str,
+    topic_map: Dict[str, int],
+    state: Dict[str, Any],
+) -> None:
+    """
+    Bu konudaki TÜM kaynak mesajlarını tek tek denetler:
+    - Hedefte gerçekten var mı?
+    - İçerik (metin ya da dosya boyutu+türü) kaynakla eşleşiyor mu?
+    Eksik ya da yanlış/bozuk gönderilmiş her şeyi otomatik olarak yeniden
+    gönderir. Bu denetim, 'tamamlandı' işaretlenmiş konularda bile HER
+    ÇALIŞTIRMADA yapılır — sadece önceki hata kayıtlarına güvenmez,
+    hedefteki gerçek mesajı kaynakla karşılaştırır.
+    """
+    done_messages = state.setdefault("done_messages", {})
+    log = state.setdefault("log", [])
+
+    last_entry_by_key: Dict[str, Dict[str, Any]] = {}
+    for entry in log:
+        if entry.get("topic_id_source") != source_topic_id:
+            continue
+        key = f"{source_topic_id}:{entry.get('source_id')}"
+        last_entry_by_key[key] = entry
+
+    dest_topic_id = topic_map.get(topic_name)
+
+    checked = 0
+    fixed = 0
+    still_broken = 0
+
+    async for message in client.iter_messages(
+        source,
+        reply_to=source_topic_id,
+        reverse=True,
+    ):
+        if not message or message.action is not None:
+            continue
+
+        expected_fp = fingerprint_source_message(message)
+        if expected_fp is None:
+            continue  # gönderilecek içerik yok, denetime gerek yok
+
+        checked += 1
+        message_key = f"{source_topic_id}:{message.id}"
+        entry = last_entry_by_key.get(message_key)
+        dest_id = entry.get("dest_id") if entry else None
+
+        actual_fp = None
+        if dest_id:
+            try:
+                fetched = await client.get_messages(destination, ids=dest_id)
+            except FloodWaitError:
+                raise
+            except Exception:
+                fetched = None
+            actual_fp = fingerprint_dest_message(fetched)
+
+        if fingerprints_match(expected_fp, actual_fp):
+            continue  # doğru şekilde gönderilmiş, sorun yok
+
+        # Buraya geldiysek: hiç gönderilmemiş ya da yanlış/eksik gönderilmiş.
+        if dest_topic_id is None:
+            try:
+                dest_topic_id = await ensure_dest_topic(
+                    client, destination, topic_name, topic_map, TOPIC_MAP_FILE,
+                )
+            except FloodWaitError:
+                raise
+            except Exception as error:
+                print(f"\n [DENETİM HATASI] Konu oluşturulamadı: {topic_name}: {error}")
+                still_broken += 1
+                continue
+
+        try:
+            sent = await send_content(client, destination, dest_topic_id, message)
+            if sent:
+                verified = await verify_sent(client, destination, sent, expected_fp[0])
+            else:
+                verified = False
+        except FloodWaitError:
+            save_state(RESUME_FILE, state)
+            raise
+        except Exception as error:
+            print(f"\n [DENETİM HATASI] #{message.id} yeniden gönderilemedi: {error}")
+            still_broken += 1
+            continue
+
+        new_entry = ForwardItem(
+            source_id=message.id,
+            topic_id_source=source_topic_id,
+            topic_name=topic_name,
+            date=(
+                message.date.isoformat()
+                if isinstance(message.date, datetime)
+                else str(message.date)
+            ),
+            text_preview=(message.raw_text or "")[:120],
+            kind=expected_fp[0],
+        )
+
+        if verified:
+            new_entry.forwarded = True
+            new_entry.dest_id = sent.id
+            done_messages[message_key] = True
+            fixed += 1
+        else:
+            new_entry.forwarded = False
+            new_entry.skipped_reason = "audit_resend_failed"
+            done_messages.pop(message_key, None)
+            still_broken += 1
+
+        log.append(asdict(new_entry))
+        save_state(RESUME_FILE, state)
+        await asyncio.sleep(POST_DELAY_SECONDS)
+
+    if checked:
+        print(
+            f" [Denetim: {topic_name}] kontrol edilen: {checked} | "
+            f"düzeltilen: {fixed} | hâlâ sorunlu: {still_broken}"
+        )
 
 
 async def main():
@@ -646,12 +910,13 @@ async def main():
 
                 if done_messages.get(message_key):
                     skipped_count += 1
-                    print(f" Atlandı (gönderilmiş): #{message.id}")
+                    print_progress(topic_name, message_count, sent_count, skipped_count)
                     continue
 
                 if DRY_RUN:
                     item.skipped_reason = "dry_run"
-                    print(f" [DRY_RUN] Atlandı: #{message.id} | {kind} | {text[:80]!r}")
+                    skipped_count += 1
+                    print_progress(topic_name, message_count, sent_count, skipped_count)
                 else:
                     try:
                         sent = await send_content(
@@ -667,7 +932,6 @@ async def main():
                             item.skipped_reason = "empty_content"
                             done_messages[message_key] = True
                             skipped_count += 1
-                            print(f" Atlandı (boş içerik): #{message.id}")
                         else:
                             verified = await verify_sent(
                                 client,
@@ -685,10 +949,11 @@ async def main():
                                 item.skipped_reason = "verify_failed"
                                 topic_had_failure = True
                                 print(
-                                    f" [HATA] Mesaj #{message.id} gönderildi göründü "
+                                    f"\n [HATA] Mesaj #{message.id} gönderildi göründü "
                                     "ama hedefte doğrulanamadı; tekrar denenecek."
                                 )
 
+                        print_progress(topic_name, message_count, sent_count, skipped_count)
                         await asyncio.sleep(POST_DELAY_SECONDS)
                     except FloodWaitError as error:
                         save_state(RESUME_FILE, state)
@@ -701,13 +966,14 @@ async def main():
                         item.skipped_reason = str(error)
                         topic_had_failure = True
                         print(
-                            f" [HATA] Mesaj #{message.id} gönderilemedi: "
+                            f"\n [HATA] Mesaj #{message.id} gönderilemedi: "
                             f"{type(error).__name__}: {error}"
                         )
 
                 state["log"].append(asdict(item))
                 save_state(RESUME_FILE, state)
 
+            print()  # ilerleme satırından sonra alt satıra geç
             print(
                 f" Konudaki toplam mesaj: {message_count} | "
                 f"Gönderilen: {sent_count} | "
@@ -727,6 +993,35 @@ async def main():
                         "denenecek."
                     )
                 save_state(RESUME_FILE, state)
+
+        # --- Otomatik denetim / onarım turu -----------------------------
+        # Her çalıştırmada, konu "tamamlandı" işaretli olsa bile TÜM
+        # dosyaları hedefle tek tek karşılaştırır. Eksik ya da yanlış
+        # (boyutu/türü uyuşmayan) bir dosya bulursa otomatik olarak
+        # yeniden gönderir. DRY_RUN'da gerçek gönderim yapılamayacağı
+        # için bu adım atlanır.
+        if DRY_RUN:
+            print(
+                "\n[DRY_RUN] Denetim/onarım adımı atlandı "
+                "(gerçek gönderim yapılmadığı için çalıştırılmadı)."
+            )
+        else:
+            print(
+                "\nTüm konular ve dosyalar denetleniyor "
+                "(eksik ya da yanlış gönderilen bir şey varsa otomatik "
+                "olarak yeniden gönderilecek)..."
+            )
+            for topic in source_topics:
+                await audit_and_repair_topic(
+                    client,
+                    source,
+                    destination,
+                    topic.id,
+                    topic.title,
+                    topic_map,
+                    state,
+                )
+            print("Denetim tamamlandı.")
 
     print("\nTamamlandı.")
 
